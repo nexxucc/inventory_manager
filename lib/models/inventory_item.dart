@@ -3,29 +3,52 @@ class InventoryItem {
   final String name;
   final String category;
   final int quantity;
+  final int? lowStockThreshold;
 
   InventoryItem({
     this.id,
     required this.name,
     required this.category,
     required this.quantity,
+    this.lowStockThreshold,
   });
 
   Map<String, dynamic> toMap() {
-    return {
+    final map = <String, dynamic>{
       'id': id,
       'name': name,
       'category': category,
       'quantity': quantity,
+      'lowStockThreshold': lowStockThreshold,
     };
+    return map;
   }
 
   factory InventoryItem.fromMap(Map<String, dynamic> map) {
     return InventoryItem(
-      id: map['id'],
-      name: map['name'],
-      category: map['category'],
-      quantity: map['quantity'],
+      id: map['id'] as int?,
+      name: map['name'] as String,
+      category: map['category'] as String,
+      quantity: map['quantity'] as int,
+      lowStockThreshold: map['lowStockThreshold'] != null
+          ? map['lowStockThreshold'] as int
+          : null,
+    );
+  }
+
+  InventoryItem copyWith({
+    int? id,
+    String? name,
+    String? category,
+    int? quantity,
+    int? lowStockThreshold,
+  }) {
+    return InventoryItem(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      category: category ?? this.category,
+      quantity: quantity ?? this.quantity,
+      lowStockThreshold: lowStockThreshold ?? this.lowStockThreshold,
     );
   }
 }
