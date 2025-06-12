@@ -4,10 +4,19 @@ import 'package:flutter/material.dart';
 import 'models/inventory_item.dart';
 import 'models/inventory_transaction.dart';
 import 'helpers/database_helper.dart';
+import 'helpers/notification_helper.dart';
 import 'utils/csv_exporter.dart';
 import 'package:intl/intl.dart';
 
-void main() => runApp(const InventoryApp());
+// Entry point
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  // Initialize notifications
+  await NotificationHelper.initialize();
+  await NotificationHelper.createNotificationChannel();
+
+  runApp(const InventoryApp());
+}
 
 class InventoryApp extends StatelessWidget {
   const InventoryApp({super.key});
@@ -46,6 +55,9 @@ class _ItemListPageState extends State<ItemListPage> {
     super.initState();
     _refreshCategories();
     _refreshItems();
+    // Optionally: on startup, notify existing low-stock items once.
+    // If desired, implement a method to check all items and call NotificationHelper.showLowStockNotificationIfNeeded(item)
+    // but careful to avoid spamming user every app launch.
   }
 
   Future<void> _refreshCategories() async {
@@ -175,7 +187,7 @@ class _ItemListPageState extends State<ItemListPage> {
       ),
       body: Column(
         children: [
-          // Category filter dropdown
+          // Category filter dropdown and export inventory
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 4),
             child: Row(
@@ -313,7 +325,7 @@ class _ItemListPageState extends State<ItemListPage> {
   }
 }
 
-// ItemFormPage: used for both Add and Edit. For Edit, do not allow direct quantity edit; instead show current quantity read-only and manage via transactions.
+// ItemFormPage: Add/Edit item. On insert/update, check low-stock and notify.
 class ItemFormPage extends StatefulWidget {
   final InventoryItem? item;
   const ItemFormPage({super.key, this.item});
@@ -327,7 +339,6 @@ class _ItemFormPageState extends State<ItemFormPage> {
   final _nameCtrl = TextEditingController();
   final _categoryCtrl = TextEditingController();
   final _thresholdCtrl = TextEditingController();
-  // We don't allow editing quantity here on edit; on create only initial quantity
   final _initQtyCtrl = TextEditingController();
 
   final dbHelper = DatabaseHelper();
@@ -338,9 +349,7 @@ class _ItemFormPageState extends State<ItemFormPage> {
     if (widget.item != null) {
       _nameCtrl.text = widget.item!.name;
       _categoryCtrl.text = widget.item!.category;
-      _thresholdCtrl.text =
-          widget.item!.lowStockThreshold?.toString() ?? '';
-      // Show current quantity read-only in UI, but not in form field for editing
+      _thresholdCtrl.text = widget.item!.lowStockThreshold?.toString() ?? '';
     }
   }
 
@@ -359,8 +368,9 @@ class _ItemFormPageState extends State<ItemFormPage> {
       final category = _categoryCtrl.text.trim();
       final thresholdText = _thresholdCtrl.text.trim();
       final threshold = thresholdText.isNotEmpty ? int.parse(thresholdText) : null;
+
       if (widget.item == null) {
-        // Creating new item: require initial quantity
+        // Create new item: require initial quantity
         final qtyText = _initQtyCtrl.text.trim();
         final qty = int.tryParse(qtyText) ?? 0;
         final newItem = InventoryItem(
@@ -369,15 +379,29 @@ class _ItemFormPageState extends State<ItemFormPage> {
           quantity: qty,
           lowStockThreshold: threshold,
         );
-        await dbHelper.insertItem(newItem);
+        final newId = await dbHelper.insertItem(newItem);
+        // Fetch saved item
+        final savedList = await dbHelper.getItems();
+        final savedItem = savedList.firstWhere((it) => it.id == newId);
+        // Notify if low-stock
+        if (savedItem.lowStockThreshold != null) {
+          // prevQty unknown; pass null so helper notifies if needed
+          await NotificationHelper.showLowStockNotificationIfNeeded(savedItem, prevQty: null);
+        }
       } else {
-        // Editing existing: only update name/category/threshold; quantity remains as is
+        // Edit existing: note previous quantity
+        final prevQty = widget.item!.quantity;
         final updatedItem = widget.item!.copyWith(
           name: name,
           category: category,
           lowStockThreshold: threshold,
         );
         await dbHelper.updateItem(updatedItem);
+        // Fetch fresh
+        final freshList = await dbHelper.getItems();
+        final freshItem = freshList.firstWhere((it) => it.id == updatedItem.id);
+        // Notify if crossing threshold due to threshold change or existing quantity
+        await NotificationHelper.showLowStockNotificationIfNeeded(freshItem, prevQty: prevQty);
       }
       if (!mounted) return;
       Navigator.of(context).pop();
@@ -420,7 +444,6 @@ class _ItemFormPageState extends State<ItemFormPage> {
                 ),
                 const SizedBox(height: 12),
               ] else ...[
-                // Show current quantity read-only
                 TextFormField(
                   initialValue: widget.item!.quantity.toString(),
                   decoration: const InputDecoration(
@@ -432,8 +455,7 @@ class _ItemFormPageState extends State<ItemFormPage> {
               ],
               TextFormField(
                 controller: _thresholdCtrl,
-                decoration: const InputDecoration(
-                    labelText: 'Low Stock Threshold (optional)'),
+                decoration: const InputDecoration(labelText: 'Low Stock Threshold (optional)'),
                 keyboardType: TextInputType.number,
                 validator: (v) {
                   if (v == null || v.trim().isEmpty) return null;
@@ -455,8 +477,7 @@ class _ItemFormPageState extends State<ItemFormPage> {
   }
 }
 
-
-// ItemDetailPage: show details and transaction history
+// ItemDetailPage: show details and transaction history, and handle notifications on transaction insert/delete.
 class ItemDetailPage extends StatefulWidget {
   final InventoryItem item;
   const ItemDetailPage({super.key, required this.item});
@@ -467,7 +488,7 @@ class ItemDetailPage extends StatefulWidget {
 
 class _ItemDetailPageState extends State<ItemDetailPage> {
   final dbHelper = DatabaseHelper();
-  late InventoryItem _item; // will refresh locally
+  late InventoryItem _item; // refreshed locally
   late Future<List<InventoryTransaction>> _txnsFuture;
   final DateFormat _dateFormat = DateFormat.yMd().add_jm();
 
@@ -479,15 +500,8 @@ class _ItemDetailPageState extends State<ItemDetailPage> {
   }
 
   Future<void> _refreshData() async {
-    // Refresh item from DB
     if (_item.id != null) {
-      final items = await dbHelper.getItems(
-        searchQuery: null,
-        categoryFilter: null,
-        sortBy: 'name',
-        ascending: true,
-      );
-      // find this item by ID
+      final items = await dbHelper.getItems();
       final fresh = items.firstWhere((it) => it.id == _item.id, orElse: () => _item);
       setState(() {
         _item = fresh;
@@ -505,6 +519,7 @@ class _ItemDetailPageState extends State<ItemDetailPage> {
 
   void _addTransaction() async {
     if (_item.id == null) return;
+    final prevQty = _item.quantity;
     final result = await showDialog<InventoryTransaction>(
       context: context,
       builder: (ctx) => AddTransactionDialog(item: _item),
@@ -512,6 +527,9 @@ class _ItemDetailPageState extends State<ItemDetailPage> {
     if (result != null) {
       await dbHelper.insertTransaction(result);
       await _refreshData();
+      // Notify if crossing threshold
+      await NotificationHelper.showLowStockNotificationIfNeeded(_item, prevQty: prevQty);
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Transaction added')),
       );
@@ -553,7 +571,6 @@ class _ItemDetailPageState extends State<ItemDetailPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Item info
             Text('Category: ${_item.category}', style: const TextStyle(fontSize: 16)),
             const SizedBox(height: 8),
             Text(
@@ -611,7 +628,8 @@ class _ItemDetailPageState extends State<ItemDetailPage> {
                               context: context,
                               builder: (ctx) => AlertDialog(
                                 title: const Text('Delete Transaction'),
-                                content: const Text('Are you sure you want to delete this transaction? This will adjust quantity accordingly.'),
+                                content: const Text(
+                                    'Are you sure you want to delete this transaction? This will adjust quantity accordingly.'),
                                 actions: [
                                   TextButton(
                                     onPressed: () => Navigator.of(ctx).pop(false),
@@ -625,8 +643,11 @@ class _ItemDetailPageState extends State<ItemDetailPage> {
                               ),
                             );
                             if (confirm == true && txn.id != null) {
+                              final prevQty = _item.quantity;
                               await dbHelper.deleteTransaction(txn.id!);
                               await _refreshData();
+                              // After deletion, quantity may increase: reset alert flag if needed
+                              await NotificationHelper.showLowStockNotificationIfNeeded(_item, prevQty: prevQty);
                               if (!mounted) return;
                               ScaffoldMessenger.of(context).showSnackBar(
                                 const SnackBar(content: Text('Transaction deleted')),
@@ -647,7 +668,7 @@ class _ItemDetailPageState extends State<ItemDetailPage> {
   }
 }
 
-// Dialog to add a transaction for an item
+// Dialog to add a transaction
 class AddTransactionDialog extends StatefulWidget {
   final InventoryItem item;
   const AddTransactionDialog({super.key, required this.item});
@@ -728,7 +749,6 @@ class _AddTransactionDialogState extends State<AddTransactionDialog> {
                 if (v == null || v.trim().isEmpty) return 'Enter quantity';
                 final parsed = int.tryParse(v.trim());
                 if (parsed == null || parsed <= 0) return 'Enter a positive number';
-                // Optionally: if out and parsed > current quantity, warn?
                 if (!_isPositive && widget.item.quantity < parsed) {
                   return 'Cannot remove more than current (${widget.item.quantity})';
                 }

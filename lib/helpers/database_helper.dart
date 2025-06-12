@@ -1,4 +1,5 @@
-import 'dart:io';
+// lib/helpers/database_helper.dart
+
 import 'package:path/path.dart';
 import 'package:sqflite/sqflite.dart';
 import '../models/inventory_item.dart';
@@ -20,12 +21,10 @@ class DatabaseHelper {
   Future<Database> _initDb() async {
     final dbPath = await getDatabasesPath();
     final path = join(dbPath, 'inventory.db');
-    // open with version=2 for new schema
     return await openDatabase(
       path,
       version: 2,
       onCreate: (database, version) async {
-        // Create items table with new column
         await database.execute('''
           CREATE TABLE items(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -35,7 +34,6 @@ class DatabaseHelper {
             lowStockThreshold INTEGER
           )
         ''');
-        // Create transactions table
         await database.execute('''
           CREATE TABLE transactions(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -49,13 +47,11 @@ class DatabaseHelper {
       },
       onUpgrade: (database, oldVersion, newVersion) async {
         if (oldVersion < 2) {
-          // Add lowStockThreshold column to items
+          // Add lowStockThreshold column
           try {
             await database.execute('ALTER TABLE items ADD COLUMN lowStockThreshold INTEGER;');
-          } catch (e) {
-            // ignore if exists
-          }
-          // Create transactions table
+          } catch (_) {}
+          // Create transactions table if not exists
           await database.execute('''
             CREATE TABLE IF NOT EXISTS transactions(
               id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -67,7 +63,6 @@ class DatabaseHelper {
             )
           ''');
         }
-        // Future upgrades: handle further migrations here.
       },
     );
   }
@@ -100,7 +95,6 @@ class DatabaseHelper {
     String whereString = whereClauses.isNotEmpty ? whereClauses.join(' AND ') : '';
 
     String orderByClause;
-    // sortBy can be 'name', 'quantity', 'category', or 'lowStock'
     switch (sortBy) {
       case 'quantity':
         orderByClause = 'quantity ${ascending ? 'ASC' : 'DESC'}';
@@ -109,10 +103,9 @@ class DatabaseHelper {
         orderByClause = 'category ${ascending ? 'ASC' : 'DESC'}';
         break;
       case 'lowStock':
-        // sort items with quantity <= threshold first: we can approximate by computing (quantity - lowStockThreshold) ascending
-        // SQLite: coalesce lowStockThreshold to large number if null
+        // Items with quantity ≤ threshold first
         orderByClause =
-            '(quantity - IFNULL(lowStockThreshold, -999999)) ASC, name ASC'; 
+            '(quantity - IFNULL(lowStockThreshold, -999999)) ASC, name ASC';
         break;
       case 'name':
       default:
@@ -140,7 +133,6 @@ class DatabaseHelper {
 
   Future<int> deleteItem(int id) async {
     final database = await db;
-    // Deleting an item should also delete its transactions due to foreign key ON DELETE CASCADE if supported.
     return await database.delete(
       'items',
       where: 'id = ?',
@@ -150,7 +142,6 @@ class DatabaseHelper {
 
   Future<List<String>> getAllCategories() async {
     final database = await db;
-    // distinct categories
     final result = await database.rawQuery('SELECT DISTINCT category FROM items ORDER BY category ASC');
     return result.map((row) => row['category'] as String).toList();
   }
@@ -159,13 +150,9 @@ class DatabaseHelper {
 
   Future<int> insertTransaction(InventoryTransaction txn) async {
     final database = await db;
-    // Start a transaction so we insert the transaction and update item quantity atomically
     return await database.transaction((txnDb) async {
-      // 1. Insert transaction record
       final id = await txnDb.insert('transactions', txn.toMap());
-
-      // 2. Update the item quantity
-      // First fetch current quantity
+      // Update item quantity
       final itemMapList = await txnDb.query(
         'items',
         columns: ['quantity'],
@@ -175,7 +162,6 @@ class DatabaseHelper {
       if (itemMapList.isNotEmpty) {
         final currentQty = itemMapList.first['quantity'] as int;
         final newQty = currentQty + txn.changeAmount;
-        // Ensure newQty >= 0? If negative, maybe disallow. Here we allow but you may check.
         await txnDb.update(
           'items',
           {'quantity': newQty},
@@ -200,8 +186,6 @@ class DatabaseHelper {
 
   Future<int> deleteTransaction(int txnId) async {
     final database = await db;
-    // If you allow deleting a transaction, you'd need to adjust the item quantity accordingly.
-    // For simplicity, here we fetch the transaction, subtract its changeAmount from the item, then delete.
     return await database.transaction((txnDb) async {
       final maps = await txnDb.query(
         'transactions',
@@ -210,7 +194,6 @@ class DatabaseHelper {
       );
       if (maps.isEmpty) return 0;
       final txn = InventoryTransaction.fromMap(maps.first);
-      // Adjust item quantity: reverse the change
       final itemMaps = await txnDb.query(
         'items',
         columns: ['quantity'],
@@ -227,7 +210,6 @@ class DatabaseHelper {
           whereArgs: [txn.itemId],
         );
       }
-      // Now delete the transaction record
       return await txnDb.delete(
         'transactions',
         where: 'id = ?',
@@ -238,9 +220,7 @@ class DatabaseHelper {
 
   Future<int> updateTransaction(InventoryTransaction txn) async {
     final database = await db;
-    // Updating a transaction is tricky because quantity change may differ: you must reverse old changeAmount, apply new one.
     return await database.transaction((txnDb) async {
-      // Fetch old transaction
       final maps = await txnDb.query(
         'transactions',
         where: 'id = ?',
@@ -248,7 +228,6 @@ class DatabaseHelper {
       );
       if (maps.isEmpty) return 0;
       final oldTxn = InventoryTransaction.fromMap(maps.first);
-      // Reverse old change
       final itemMaps = await txnDb.query(
         'items',
         columns: ['quantity'],
@@ -258,7 +237,6 @@ class DatabaseHelper {
       if (itemMaps.isNotEmpty) {
         int qty = itemMaps.first['quantity'] as int;
         qty -= oldTxn.changeAmount;
-        // Apply new change:
         qty += txn.changeAmount;
         await txnDb.update(
           'items',
@@ -267,7 +245,6 @@ class DatabaseHelper {
           whereArgs: [oldTxn.itemId],
         );
       }
-      // Update transaction record
       return await txnDb.update(
         'transactions',
         txn.toMap(),
@@ -276,8 +253,6 @@ class DatabaseHelper {
       );
     });
   }
-
-  // ---------- Export helpers ----------
 
   Future<String> getDatabasePath() async {
     final dbPath = await getDatabasesPath();

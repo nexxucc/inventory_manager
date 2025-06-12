@@ -14,14 +14,13 @@ class InventoryItem {
   });
 
   Map<String, dynamic> toMap() {
-    final map = <String, dynamic>{
+    return {
       'id': id,
       'name': name,
       'category': category,
       'quantity': quantity,
       'lowStockThreshold': lowStockThreshold,
     };
-    return map;
   }
 
   factory InventoryItem.fromMap(Map<String, dynamic> map) {
