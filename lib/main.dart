@@ -7,6 +7,7 @@ import 'helpers/database_helper.dart';
 import 'helpers/notification_helper.dart';
 import 'utils/csv_exporter.dart';
 import 'package:intl/intl.dart';
+import 'widgets/inventory_item_card.dart';
 
 // Entry point
 void main() async {
@@ -24,7 +25,55 @@ class InventoryApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Inventory Manager',
-      theme: ThemeData(primarySwatch: Colors.blue),
+      theme: ThemeData(
+        useMaterial3: true,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF4A90E2), // primary seed color
+          brightness: Brightness.light,
+          secondary: const Color(0xFFF5A623), // accent
+          background: const Color(0xFFF7F7F7),
+          error: Colors.redAccent,
+        ),
+        scaffoldBackgroundColor: const Color(0xFFF7F7F7),
+        appBarTheme: const AppBarTheme(
+          elevation: 2,
+          backgroundColor: Color(0xFF4A90E2),
+          foregroundColor: Colors.white,
+        ),
+        elevatedButtonTheme: ElevatedButtonThemeData(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFF4A90E2),
+            foregroundColor: Colors.white,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            elevation: 2,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          ),
+        ),
+        textButtonTheme: TextButtonThemeData(
+          style: TextButton.styleFrom(
+            foregroundColor: const Color(0xFF4A90E2),
+          ),
+        ),
+        inputDecorationTheme: InputDecorationTheme(
+          filled: true,
+          fillColor: Colors.white,
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: BorderSide.none,
+          ),
+        ),
+        cardTheme: CardThemeData(
+          elevation: 2,
+          margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+        ),
+      ),
       home: const ItemListPage(),
     );
   }
@@ -173,7 +222,8 @@ class _ItemListPageState extends State<ItemListPage> {
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(8),
                       ),
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 12),
+                      contentPadding:
+                          const EdgeInsets.symmetric(horizontal: 12),
                     ),
                     onChanged: _onSearchChanged,
                   ),
@@ -245,8 +295,6 @@ class _ItemListPageState extends State<ItemListPage> {
                     itemCount: items.length,
                     itemBuilder: (ctx, i) {
                       final it = items[i];
-                      final lowThreshold = it.lowStockThreshold;
-                      final isLow = (lowThreshold != null && it.quantity <= lowThreshold);
                       return Dismissible(
                         key: ValueKey(it.id),
                         direction: DismissDirection.endToStart,
@@ -261,7 +309,8 @@ class _ItemListPageState extends State<ItemListPage> {
                             context: context,
                             builder: (ctx) => AlertDialog(
                               title: const Text('Confirm Delete'),
-                              content: Text('Delete item "${it.name}"? This cannot be undone.'),
+                              content: Text(
+                                  'Delete item "${it.name}"? This cannot be undone.'),
                               actions: [
                                 TextButton(
                                   onPressed: () => Navigator.of(ctx).pop(false),
@@ -269,7 +318,8 @@ class _ItemListPageState extends State<ItemListPage> {
                                 ),
                                 TextButton(
                                   onPressed: () => Navigator.of(ctx).pop(true),
-                                  child: const Text('Delete', style: TextStyle(color: Colors.red)),
+                                  child: const Text('Delete',
+                                      style: TextStyle(color: Colors.red)),
                                 ),
                               ],
                             ),
@@ -285,28 +335,17 @@ class _ItemListPageState extends State<ItemListPage> {
                             );
                           }
                         },
-                        child: ListTile(
-                          tileColor: isLow ? Colors.red.shade50 : null,
-                          title: Text(it.name),
-                          subtitle: Text('${it.category} • Qty: ${it.quantity}'
-                              '${lowThreshold != null ? ' (Low≤$lowThreshold)' : ''}'),
+                        child: InventoryItemCard(
+                          item: it,
                           onTap: () {
                             if (it.id != null) {
                               Navigator.of(context)
-                                  .push(MaterialPageRoute(builder: (_) => ItemDetailPage(item: it)))
+                                  .push(MaterialPageRoute(
+                                    builder: (_) => ItemDetailPage(item: it),
+                                  ))
                                   .then((_) => _onRefresh());
                             }
                           },
-                          trailing: IconButton(
-                            icon: const Icon(Icons.edit),
-                            onPressed: () {
-                              if (it.id != null) {
-                                Navigator.of(context)
-                                    .push(MaterialPageRoute(builder: (_) => ItemFormPage(item: it)))
-                                    .then((_) => _onRefresh());
-                              }
-                            },
-                          ),
                         ),
                       );
                     },
@@ -367,7 +406,8 @@ class _ItemFormPageState extends State<ItemFormPage> {
       final name = _nameCtrl.text.trim();
       final category = _categoryCtrl.text.trim();
       final thresholdText = _thresholdCtrl.text.trim();
-      final threshold = thresholdText.isNotEmpty ? int.parse(thresholdText) : null;
+      final threshold =
+          thresholdText.isNotEmpty ? int.parse(thresholdText) : null;
 
       if (widget.item == null) {
         // Create new item: require initial quantity
@@ -386,7 +426,8 @@ class _ItemFormPageState extends State<ItemFormPage> {
         // Notify if low-stock
         if (savedItem.lowStockThreshold != null) {
           // prevQty unknown; pass null so helper notifies if needed
-          await NotificationHelper.showLowStockNotificationIfNeeded(savedItem, prevQty: null);
+          await NotificationHelper.showLowStockNotificationIfNeeded(savedItem,
+              prevQty: null);
         }
       } else {
         // Edit existing: note previous quantity
@@ -401,7 +442,8 @@ class _ItemFormPageState extends State<ItemFormPage> {
         final freshList = await dbHelper.getItems();
         final freshItem = freshList.firstWhere((it) => it.id == updatedItem.id);
         // Notify if crossing threshold due to threshold change or existing quantity
-        await NotificationHelper.showLowStockNotificationIfNeeded(freshItem, prevQty: prevQty);
+        await NotificationHelper.showLowStockNotificationIfNeeded(freshItem,
+            prevQty: prevQty);
       }
       if (!mounted) return;
       Navigator.of(context).pop();
@@ -422,23 +464,27 @@ class _ItemFormPageState extends State<ItemFormPage> {
               TextFormField(
                 controller: _nameCtrl,
                 decoration: const InputDecoration(labelText: 'Item Name'),
-                validator: (v) => v == null || v.trim().isEmpty ? 'Enter name' : null,
+                validator: (v) =>
+                    v == null || v.trim().isEmpty ? 'Enter name' : null,
               ),
               const SizedBox(height: 12),
               TextFormField(
                 controller: _categoryCtrl,
                 decoration: const InputDecoration(labelText: 'Category'),
-                validator: (v) => v == null || v.trim().isEmpty ? 'Enter category' : null,
+                validator: (v) =>
+                    v == null || v.trim().isEmpty ? 'Enter category' : null,
               ),
               const SizedBox(height: 12),
               if (!isEdit) ...[
                 TextFormField(
                   controller: _initQtyCtrl,
-                  decoration: const InputDecoration(labelText: 'Initial Quantity'),
+                  decoration:
+                      const InputDecoration(labelText: 'Initial Quantity'),
                   keyboardType: TextInputType.number,
                   validator: (v) {
                     if (v == null || v.trim().isEmpty) return 'Enter quantity';
-                    if (int.tryParse(v.trim()) == null) return 'Enter a valid number';
+                    if (int.tryParse(v.trim()) == null)
+                      return 'Enter a valid number';
                     return null;
                   },
                 ),
@@ -455,7 +501,8 @@ class _ItemFormPageState extends State<ItemFormPage> {
               ],
               TextFormField(
                 controller: _thresholdCtrl,
-                decoration: const InputDecoration(labelText: 'Low Stock Threshold (optional)'),
+                decoration: const InputDecoration(
+                    labelText: 'Low Stock Threshold (optional)'),
                 keyboardType: TextInputType.number,
                 validator: (v) {
                   if (v == null || v.trim().isEmpty) return null;
@@ -502,7 +549,8 @@ class _ItemDetailPageState extends State<ItemDetailPage> {
   Future<void> _refreshData() async {
     if (_item.id != null) {
       final items = await dbHelper.getItems();
-      final fresh = items.firstWhere((it) => it.id == _item.id, orElse: () => _item);
+      final fresh =
+          items.firstWhere((it) => it.id == _item.id, orElse: () => _item);
       setState(() {
         _item = fresh;
         _txnsFuture = dbHelper.getTransactionsForItem(_item.id!);
@@ -528,7 +576,8 @@ class _ItemDetailPageState extends State<ItemDetailPage> {
       await dbHelper.insertTransaction(result);
       await _refreshData();
       // Notify if crossing threshold
-      await NotificationHelper.showLowStockNotificationIfNeeded(_item, prevQty: prevQty);
+      await NotificationHelper.showLowStockNotificationIfNeeded(_item,
+          prevQty: prevQty);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Transaction added')),
@@ -571,7 +620,8 @@ class _ItemDetailPageState extends State<ItemDetailPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Category: ${_item.category}', style: const TextStyle(fontSize: 16)),
+            Text('Category: ${_item.category}',
+                style: const TextStyle(fontSize: 16)),
             const SizedBox(height: 8),
             Text(
               'Current Quantity: ${_item.quantity}'
@@ -588,7 +638,8 @@ class _ItemDetailPageState extends State<ItemDetailPage> {
               label: const Text('Add Transaction'),
             ),
             const SizedBox(height: 16),
-            const Text('Transactions:', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const Text('Transactions:',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             const SizedBox(height: 8),
             Expanded(
               child: FutureBuilder<List<InventoryTransaction>>(
@@ -632,12 +683,15 @@ class _ItemDetailPageState extends State<ItemDetailPage> {
                                     'Are you sure you want to delete this transaction? This will adjust quantity accordingly.'),
                                 actions: [
                                   TextButton(
-                                    onPressed: () => Navigator.of(ctx).pop(false),
+                                    onPressed: () =>
+                                        Navigator.of(ctx).pop(false),
                                     child: const Text('Cancel'),
                                   ),
                                   TextButton(
-                                    onPressed: () => Navigator.of(ctx).pop(true),
-                                    child: const Text('Delete', style: TextStyle(color: Colors.red)),
+                                    onPressed: () =>
+                                        Navigator.of(ctx).pop(true),
+                                    child: const Text('Delete',
+                                        style: TextStyle(color: Colors.red)),
                                   ),
                                 ],
                               ),
@@ -647,10 +701,13 @@ class _ItemDetailPageState extends State<ItemDetailPage> {
                               await dbHelper.deleteTransaction(txn.id!);
                               await _refreshData();
                               // After deletion, quantity may increase: reset alert flag if needed
-                              await NotificationHelper.showLowStockNotificationIfNeeded(_item, prevQty: prevQty);
+                              await NotificationHelper
+                                  .showLowStockNotificationIfNeeded(_item,
+                                      prevQty: prevQty);
                               if (!mounted) return;
                               ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(content: Text('Transaction deleted')),
+                                const SnackBar(
+                                    content: Text('Transaction deleted')),
                               );
                             }
                           },
@@ -748,7 +805,8 @@ class _AddTransactionDialogState extends State<AddTransactionDialog> {
               validator: (v) {
                 if (v == null || v.trim().isEmpty) return 'Enter quantity';
                 final parsed = int.tryParse(v.trim());
-                if (parsed == null || parsed <= 0) return 'Enter a positive number';
+                if (parsed == null || parsed <= 0)
+                  return 'Enter a positive number';
                 if (!_isPositive && widget.item.quantity < parsed) {
                   return 'Cannot remove more than current (${widget.item.quantity})';
                 }
@@ -764,7 +822,9 @@ class _AddTransactionDialogState extends State<AddTransactionDialog> {
         ),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Cancel')),
+        TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel')),
         ElevatedButton(onPressed: _submit, child: const Text('Add')),
       ],
     );
